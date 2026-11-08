@@ -1,0 +1,49 @@
+#!/usr/bin/env expect
+#
+# Drive `tar -M` (multi-volume) against a simtap drive, swapping cartridges
+# automatically whenever tar asks for the next volume.
+#
+# Usage:
+#   tar_multivolume.exp <BIN> <LIB> <vols> <tar-args...>
+#
+#   <BIN>      simtap binary (used to eject/insert cartridges)
+#   <LIB>      library directory
+#   <vols>     comma-separated list of the volume labels tar will ask for, in
+#              order. The FIRST volume must already be inserted before invoking
+#              this script (tar counts it as volume #1); the list supplies the
+#              labels for volumes #2, #3, ... A tar run that spans to exactly
+#              one more volume passes a single label, e.g. "span2" or "mv2".
+#              A run spanning two more volumes passes "mv2,mv3".
+#   <tar-args> the tar command and its arguments (the tar binary itself first)
+#
+# GNU tar 1.35 prints exactly one prompt when it needs the next volume
+# (src/buffer.c, change_tape_menu):
+#     Prepare volume #N for <archive> and hit return:
+# where N is the 1-based volume number (the first prompt is #2). On each such
+# prompt this script ejects the current cartridge and inserts vols[N-2] (so
+# prompt #2 -> vols[0], prompt #3 -> vols[1], ...), then sends the return.
+#
+set BIN     [lindex $argv 0]
+set LIB     [lindex $argv 1]
+set vols    [split [lindex $argv 2] ","]
+set tarargs [lrange $argv 3 end]
+set timeout 120
+
+log_user 1
+spawn {*}$tarargs
+expect {
+    -re {Prepare volume #(\d+) for .* and hit return:} {
+        set n     $expect_out(1,string)
+        set label [lindex $vols [expr {$n - 2}]]
+        system "$BIN eject --library $LIB"
+        system "$BIN insert $label --library $LIB"
+        send "\n"
+        exp_continue
+    }
+    timeout { puts "MV-TIMEOUT"; exit 98 }
+    eof {
+        catch wait r
+        set code [lindex $r 3]
+        exit $code
+    }
+}
